@@ -1,7 +1,7 @@
 ansible_user: root
 ansible_ssh_pass: squid
 
-# Ceph 클러스터 배포 관련 설정1
+# Ceph 클러스터 배포 관련 설정
 ceph:
   version: "quay.io/ceph/ceph:v19.2.0"
   cephadm_version: "19.2.0"
