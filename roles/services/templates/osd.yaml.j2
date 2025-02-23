@@ -1,0 +1,13 @@
+service_type: osd
+service_id: {{ services.osd.name }}
+placement:
+  hosts:
+  {% for host in services.osd.hosts %}
+    - {{ host }}
+  {% endfor %}
+spec:
+  data_devices:
+    paths:
+    {% for device in services.osd.devices %}
+      - {{ device }}
+    {% endfor %}

@@ -1,0 +1,5 @@
+- name: Ceph 클러스터 정리
+  hosts: all
+  become: yes
+  roles:
+    - clean

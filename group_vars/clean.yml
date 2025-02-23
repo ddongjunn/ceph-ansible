@@ -1,0 +1,19 @@
+# Ceph는 OSD를 새 클러스터에 통합할 때 기존 OSD의 데이터가 유효한지 확인함
+# FSID가 다르면 OSD를 새로 포맷하거나 데이터 무결성을 보장하지 않을 수 있습니다.
+# 즉, 데이터는 물리적으로 남아 있지만, 새 클러스터에서 바로 사용하려면 추가 작업(예: OSD 복구 또는 데이터 마이그레이션)이 필요
+# wipe_data: true  데이터를 삭제할지 여부
+# wipe_lvm: true  LVM 관련 데이터도 삭제할지 여부
+
+
+ceph:
+  clean:
+    dirs:  # 삭제할 디렉토리 목록
+      - /etc/ceph
+      - /var/lib/ceph
+      - /var/log/ceph
+    packages:  # 삭제할 패키지 목록
+      - ceph
+      - ceph-mgr
+      - ceph-mon
+      - ceph-osd
+      - ceph-mds

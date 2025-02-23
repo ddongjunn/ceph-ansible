@@ -1,0 +1,107 @@
+ansible_user: root
+ansible_ssh_pass: squid
+
+# Ceph 클러스터 배포 관련 설정1
+ceph:
+  version: "quay.io/ceph/ceph:v19.2.0"
+  cephadm_version: "19.2.0"
+  fsid: "c28b71f6-b2e2-11ef-be79-080027b7bc18" # FSID 미지정 시 자동 생성
+  mon_ip: 192.168.0.121
+  cluster_network: "10.0.3.0/24"
+  bootstrap_node: "squid7"
+  dashboard:
+    init_password: "ceph!@#$"
+hosts:
+  - "squid7"
+  - "squid8"
+  - "squid9"
+
+# 배포할 서비스 정의
+services:
+  # 필수 서비스: Ceph 클러스터의 기본 동작을 위해 반드시 배포해야 함
+  mon:
+    placement: "3"  # Monitor: 클러스터 상태 관리, 최소 1개 이상 필요 (3 추천)
+  mgr:
+    placement: "2"  # Manager: 관리 기능 및 대시보드 제공, 최소 1개 이상 필요 (2 추천)
+  osd:
+    name: "osd.default"  # Object Storage Daemon: 데이터 저장, 필수
+    hosts:
+      - "squid7"
+      - "squid8"
+      - "squid9"
+    devices:
+      - "/dev/sdb"
+      - "/dev/sdc"
+
+  # 선택 서비스: 필요에 따라 배포, 사용하지 않을 경우 빈 리스트([])로 설정 가능    
+  mds: # Metadata Server: CephFS(파일 스토리지) 사용 시 필요
+    - name: "mds.default"
+      placement: "3"
+      pool:
+        metadata: "cephfs_metadata"
+        data: "cephfs_data"
+  rgw: # RADOS Gateway: 객체 스토리지(S3/Swift) 사용 시 필요
+    - name: "rgw.default"
+      placement: "3"
+      pool: "rgw_data"
+      realm: "realm.default"
+      zonegroup: "zonegroup.default"
+      zone: "zone.default"
+    - name: "rgw.default2"
+      placement: "2"
+      pool: "rgw_data_2"
+      realm: "realm.default2"
+      zonegroup: "zonegroup.default2"
+      zone: "zone.default2"
+  nfs: # NFS: CephFS 기반 NFS 서버, 파일 스토리지 사용 시 필요 (MDS 의존)
+    - name: "nfs.default"
+      placement: "3"
+      pool: "cephfs_data"
+  rbd_mirror: # RBD Mirror: 블록 스토리지 미러링 사용 시 필요
+    - placement: "3"
+      pool: "rbd_pool"
+  iscsi: # iSCSI Gateway: 블록 스토리지를 iSCSI로 제공 시 필요
+    - name: "iscsi.default"
+      pool: "iscsi_pool"
+      api_user: "iscsi_admin_user"
+      api_password: "ceph!@#$"
+      api_port: 5001
+      placement:
+        hosts:
+          - "squid7"
+          - "squid8"
+          - "squid9"
+    - name: "iscsi.default2"
+      pool: "iscsi_pool_2"
+      api_user: "iscsi_admin_user2"
+      api_password: "ceph!@#$"
+      api_port: 5002
+      placement:
+        hosts:
+          - "squid8"
+          - "squid9"
+  nvmeof: # NVMe over Fabrics: 고성능 블록 스토리지 사용 시 필요
+    - name: "nvmeof.default"
+      pool: "nvme_pool"
+      placement:
+        hosts:
+          - "squid8"
+          - "squid9"
+    - name: "nvmeof.default2"
+      pool: "nvme_pool_2"
+      placement:
+        hosts:
+          - "squid7"
+          - "squid8"
+  monitoring: # 모니터링 도구: 클러스터 상태 모니터링 시 필요
+    prometheus:
+      placement: "1"
+    grafana:
+      api_url: "https://192.168.0.121:3000"
+      placement: "1"
+    alertmanager:
+      placement: "1"
+    node_exporter:
+      placement: "*"
+    crash:
+      placement: "*"

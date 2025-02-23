@@ -1,0 +1,120 @@
+---
+- name: Ceph 클러스터 정리
+  hosts: all
+  become: yes
+
+  tasks:
+    - name: Ceph 클러스터 상태 확인
+      shell: cephadm shell -- ceph status --format json
+      register: ceph_status
+      ignore_errors: yes
+      changed_when: false
+      when: inventory_hostname == ceph.bootstrap_node
+
+    - name: Ceph 클러스터 존재 여부 확인
+      set_fact:
+        ceph_cluster_exists: "{{ ceph_status.rc == 0 }}"
+      when: inventory_hostname == ceph.bootstrap_node
+
+    - name: Ceph 클러스터가 이미 삭제되었음을 알림
+      debug:
+        msg: "Ceph 클러스터가 이미 존재하지 않습니다."
+      when: inventory_hostname == ceph.bootstrap_node and not ceph_cluster_exists | default(false)
+
+    - name: 플레이북 종료 (클러스터 없음)
+      meta: end_play
+      when: inventory_hostname == ceph.bootstrap_node and not ceph_cluster_exists | default(false)
+
+    - name: Ceph 클러스터 FSID 가져오기
+      shell: cephadm shell -- ceph fsid
+      register: ceph_fsid
+      ignore_errors: yes
+      when: inventory_hostname == ceph.bootstrap_node
+
+    - name: Ceph 관련 systemd 서비스 목록 조회
+      shell: systemctl list-units --type=service --no-pager --no-legend | awk '{print $1}' | grep "ceph-"
+      register: ceph_systemd_services
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Ceph 관련 서비스 중지
+      shell: systemctl stop {{ item }}
+      loop: "{{ ceph_systemd_services.stdout_lines }}"
+      ignore_errors: yes
+      when: ceph_systemd_services.stdout_lines | length > 0
+
+    - name: Ceph 관련 서비스 비활성화
+      shell: systemctl disable {{ item }}
+      loop: "{{ ceph_systemd_services.stdout_lines }}"
+      ignore_errors: yes
+      when: ceph_systemd_services.stdout_lines | length > 0
+
+    - name: Systemd 실패 상태 초기화
+      shell: systemctl reset-failed
+      ignore_errors: yes    
+
+    - name: Ceph systemd 서비스 파일 제거
+      file:
+        path: "/etc/systemd/system/{{ item }}"
+        state: absent
+      loop: "{{ ceph_systemd_services.stdout_lines }}"
+      ignore_errors: yes  
+
+    - name: cephadm rm-cluster 실행 (데이터 유지)
+      shell: cephadm shell -- cephadm rm-cluster --force --fsid "{{ ceph_fsid.stdout }}"
+      when: inventory_hostname == ceph.bootstrap_node and not clean.wipe_data | default(false)
+      ignore_errors: yes
+
+    - name: cephadm rm-cluster 실행 (완전 삭제)
+      shell: cephadm shell -- cephadm rm-cluster --force --zap-osds --fsid "{{ ceph_fsid.stdout }}"
+      when: inventory_hostname == ceph.bootstrap_node and clean.wipe_data | default(false)
+      ignore_errors: yes
+
+    - name: Ceph 관련 컨테이너 정리 
+      shell: docker rm -f $(docker ps -aq --filter name=ceph-) || true
+      ignore_errors: yes  
+
+    - name: Ceph 관련 Docker 이미지 삭제
+      shell: docker rmi -f $(docker images -q quay.io/ceph/*) || true
+      ignore_errors: yes 
+
+    - name: 잔여 Ceph 프로세스 강제 종료
+      shell: pkill -9 -f ceph || true
+      ignore_errors: yes
+
+    - name: Ceph 관련 패키지 제거
+      apt:
+        name: "{{ clean.packages }}"
+        state: absent
+        purge: yes
+        autoremove: yes  
+      when: clean.wipe_data | default(false)  # 완전 삭제 시에만 패키지 제거
+
+    - name: Ceph 관련 파일 및 디렉토리 삭제
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop: "{{ clean.dirs }}"
+      when: clean.wipe_data | default(false)  # 완전 삭제 시에만 디렉토리 삭제
+      ignore_errors: yes
+
+    - name: Ceph 로그 파일 추가 정리
+      shell: find /var/log -name "*ceph*" -exec rm -f {} \;
+      when: clean.wipe_data | default(false)  # 완전 삭제 시에만 로그 삭제
+      ignore_errors: yes
+
+    - name: 삭제 후 클러스터 상태 점검
+      shell: cephadm shell -- ceph status
+      register: final_status
+      ignore_errors: yes
+      changed_when: false
+      when: inventory_hostname == ceph.bootstrap_node
+
+    - name: 삭제 결과 출력
+      debug:
+        msg: "Ceph 클러스터 삭제 결과: {{ '실패 - 클러스터가 여전히 존재합니다' if final_status.rc == 0 else '성공 - 클러스터가 제거되었습니다' }}"
+      when: inventory_hostname == ceph.bootstrap_node
+
+    - name: Ceph 정리 완료 메시지
+      debug:
+        msg: "Ceph 클러스터 정리가 완료되었습니다. 일부 파일이 남아 있을 경우 수동으로 확인하세요."  

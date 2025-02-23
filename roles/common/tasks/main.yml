@@ -1,0 +1,41 @@
+- name: 필수 시스템 패키지 설치
+  apt:
+    name:
+      - docker.io
+      - curl
+      - python3
+      - jq
+      - sshpass
+    state: present
+    update_cache: yes
+
+- name: cephadm 설치 여부 확인
+  stat:
+    path: /usr/sbin/cephadm
+  register: cephadm_check
+
+- name: Cephadm 설치 여부 확인
+  debug:
+  msg: "Cephadm가 설치됨: {{ cephadm_check.stat.exists }}"  
+
+- name: cephadm 다운로드 및 설치
+  shell: |
+    curl --silent --remote-name --location https://download.ceph.com/rpm-{{ ceph.cephadm_version }}/el9/noarch/cephadm
+    chmod +x cephadm
+    mv cephadm /usr/sbin/cephadm
+  args:
+    creates: /usr/sbin/cephadm
+  when: not cephadm_check.stat.exists
+  
+- name: Ceph Docker 이미지 pull
+  docker_image:
+    name: "{{ ceph.version | regex_replace(':.+', '') }}"
+    tag: "{{ ceph.version | regex_replace('.+:', '') }}"
+    source: pull
+    state: present
+
+# - name: /var/lib/ceph 디렉토리 생성
+#   file:
+#     path: /var/lib/ceph
+#     state: directory
+#     mode: '0755'
