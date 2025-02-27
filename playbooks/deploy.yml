@@ -1,8 +1,12 @@
+---
 - name: Ceph 클러스터 배포
   hosts: all
-  become: yes
+  become: true
   roles:
-    - ceph_common
-    - { role: bootstrap, when: inventory_hostname == ceph.bootstrap_node }
-    - { role: services, when: inventory_hostname == ceph.bootstrap_node }
-    - { role: health_check, when: inventory_hostname == ceph.bootstrap_node }
+    - common
+    - role: bootstrap
+      when: "'bootstrap' in group_names"
+    - role: services
+      when: "'bootstrap' in group_names"
+    - role: health_check
+      when: "'bootstrap' in group_names"
