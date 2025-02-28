@@ -1,0 +1,12 @@
+---
+- name: Ceph 클러스터 배포
+  hosts: all
+  become: true
+  roles:
+    - common
+    - role: bootstrap
+      when: "'bootstrap' in group_names"
+    - role: services
+      when: "'bootstrap' in group_names"
+    - role: health_check
+      when: "'bootstrap' in group_names"

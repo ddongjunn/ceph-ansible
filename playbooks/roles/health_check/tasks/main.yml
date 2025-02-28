@@ -1,0 +1,58 @@
+---
+- name: Ceph 상태 확인
+  shell: cephadm shell -- ceph -s --format json-pretty
+  register: ceph_status
+
+- name: Ceph 상태 출력
+  debug:
+    msg: "{{ ceph_status.stdout | from_json }}"
+
+- name: Ceph Dashboard URL 확인
+  shell: cephadm shell -- ceph mgr services --format json-pretty
+  register: ceph_dashboard_url
+
+- name: Ceph Dashboard 접속 정보 출력
+  debug:
+    msg: "{{ ceph_dashboard_url.stdout | from_json }}"
+
+- name: Ceph Dashboard 관리자 계정 정보 확인
+  shell: cephadm shell -- ceph dashboard ac-user-show admin --format json-pretty
+  register: ceph_dashboard_admin
+
+- name: Ceph Dashboard 관리자 계정 상태 출력
+  debug:
+    msg: "{{ ceph_dashboard_admin.stdout | from_json }}"
+
+- name: "배포 로그 및 상태 기록"
+  block:
+    - name: "로그 디렉토리 생성"
+      ansible.builtin.file:
+        path: /var/log/ceph-ansible
+        state: directory
+        mode: '0755'
+      changed_when: false
+
+    - name: "현재 날짜 및 시간 가져오기"
+      ansible.builtin.command: date "+%Y%m%d_%H%M%S"
+      register: timestamp
+      changed_when: false
+
+    - name: "클러스터 상태 확인"
+      ansible.builtin.shell: cephadm shell -- ceph -s
+      register: cluster_status
+
+    - name: "클러스터 상태 로그 기록"
+      ansible.builtin.copy:
+        content: "{{ cluster_status.stdout }}"
+        dest: "/var/log/ceph-ansible/cluster_status_{{ timestamp.stdout }}.log"
+        mode: '0644'
+
+    - name: "주요 서비스 상태 확인"
+      ansible.builtin.shell: cephadm shell -- ceph orch ps
+      register: services_status
+
+    - name: "주요 서비스 상태 로그 기록"
+      ansible.builtin.copy:
+        content: "{{ services_status.stdout }}"
+        dest: "/var/log/ceph-ansible/services_status_{{ timestamp.stdout }}.log"
+        mode: '0644'

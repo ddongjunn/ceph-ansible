@@ -1,0 +1,9 @@
+service_type: nvmeof
+service_id: {{ item.name }}
+placement:
+  hosts:
+{% for host in item.placement.hosts %}
+    - {{ host }}
+{% endfor %}
+spec:
+  pool: {{ item.pool }}

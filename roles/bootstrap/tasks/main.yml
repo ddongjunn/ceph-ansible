@@ -1,0 +1,102 @@
+---
+# - name: "클러스터 유무 확인"
+#   shell: cephadm shell -- ceph fsid
+#   register: ceph_fsid
+#   ignore_errors: true
+
+# - name: "클러스터가 존재하는 경우"
+#   fail:
+#     msg: "Ceph 클러스터가 이미 존재합니다! FSID: {{ ceph_fsid.stdout }}"
+#   when:
+#     - ceph_fsid.rc == 0
+#     - ceph_fsid.stdout | length > 0
+
+- name: "클러스터 유무 확인"
+  shell: cephadm shell -- ceph fsid
+  register: ceph_fsid
+  ignore_errors: true
+
+- name: "클러스터가 존재하는 경우 설치 중단"
+  fail:
+    msg: |
+      ❌ Ceph 클러스터가 이미 존재합니다! 
+      설치를 진행하려면 기존 클러스터를 제거하세요.
+
+      ➤ FSID: {{ ceph_fsid.stdout }}
+  when:
+    - ceph_fsid.rc == 0
+    - ceph_fsid.stdout | length > 0
+
+- name: Ceph 클러스터 부트스트랩
+  block:
+    - name: 클러스터 부트스트랩 시도
+      shell: >
+        CEPHADM_IMAGE={{ ceph.version }} cephadm bootstrap 
+        --mon-ip={{ ceph.mon_ip }} 
+        --allow-overwrite
+        --cluster-network={{ ceph.cluster_network }}
+        {% if ceph.fsid is defined and ceph.fsid != '' %}
+        --fsid={{ ceph.fsid }}
+        {% endif %}
+      register: bootstrap_result
+      failed_when: bootstrap_result.rc != 0
+
+    - name: 현재 날짜 및 시간 가져오기
+      command: date "+%Y%m%d_%H%M%S"
+      register: timestamp
+      changed_when: false
+  
+    - name: 부트스트랩 로그 기록
+      copy:
+        content: "{{ bootstrap_result.stdout }}"
+        dest: /var/log/ceph-ansible/bootstrap_{{ timestamp.stdout }}.log
+      when: bootstrap_result.rc != 0
+  rescue:
+    - name: 부트스트랩 실패 알림
+      fail:
+        msg: "Ceph 클러스터 부트스트랩에 실패했습니다. 로그를 확인하세요."    
+
+- name: Ceph 클러스터 생성 확인
+  shell: cephadm shell -- ceph status --format json
+  register: ceph_status
+  until: >
+    (ceph_status.stdout | from_json).health.status == 'HEALTH_OK' or
+    (ceph_status.stdout | from_json).health.status == 'HEALTH_WARN'
+  retries: 30
+  delay: 10    
+
+- name: Ceph SSH 키 가져오기
+  shell: cephadm shell -- ceph cephadm get-pub-key
+  register: ceph_pubkey
+
+- name: SSH 키 파일로 저장
+  copy:
+    content: "{{ ceph_pubkey.stdout }}"
+    dest: /tmp/ceph.pub
+  
+- name: 다른 노드에 Ceph SSH 키 배포
+  shell: sshpass -p "{{ ansible_ssh_pass }}" ssh-copy-id -f -o StrictHostKeyChecking=no -i /tmp/ceph.pub root@{{ hostvars[item]['ansible_host'] }}
+  loop: "{{ groups['all'] | difference([inventory_hostname]) }}"
+
+- name: 다른 노드를 클러스터에 추가
+  shell: cephadm shell -- ceph orch host add {{ item }} {{ hostvars[item]['ansible_host'] }}
+  loop: "{{ groups['all'] | difference([inventory_hostname]) }}"
+
+# - name: 부트스트랩 노드에 _admin 레이블 추가
+#   shell: cephadm shell -- ceph orch host label add {{ inventory_hostname }} _admin
+#   when: inventory_hostname in groups['bootstrap']
+
+- name: 모든 노드에 _admin 레이블 추가
+  shell: cephadm shell -- ceph orch host label add {{ item }} _admin
+  loop: "{{ groups['all'] }}"
+
+- name: 호스트가 등록될 때까지 대기
+  shell: cephadm shell -- ceph orch host ls --format json
+  register: host_list
+  until: (host_list.stdout | from_json | json_query('[*].hostname') | sort) == (groups['all'] | list | sort)
+  retries: 10
+  delay: 5
+  delegate_to: "{{ groups['bootstrap'][0] }}"
+
+- name: Ceph 클러스터의 cluster_network 설정
+  shell: cephadm shell -- ceph config set mon cluster_network {{ ceph.cluster_network }}

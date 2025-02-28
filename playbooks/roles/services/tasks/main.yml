@@ -1,0 +1,311 @@
+- name: Apply MON and MGR services
+  shell: |
+    cephadm shell -- ceph orch apply mon --placement="{{ services.mon.placement }}"
+    cephadm shell -- ceph orch apply mgr --placement="{{ services.mgr.placement }}"
+
+- name: MON, MGR 상태 확인
+  shell: cephadm shell -- ceph orch ps | grep -E 'mon|mgr' | grep 'running'
+  register: ceph_services_status
+  until: "'mon' in ceph_services_status.stdout and 'mgr' in ceph_services_status.stdout"
+  retries: 20
+  delay: 5
+
+- name: osd 서비스 배포
+  block:
+    - name: osd 배포 (모든 사용 가능한 디바이스 자동 추가)
+      shell: cephadm shell -- ceph orch apply osd --all-available-devices
+      when: services.osd.all_available_devices | default(false)
+
+    - name: osd 배포 (지정된 디바이스 사용)
+      block:
+        - name: osd spec 파일 생성
+          template:
+            src: osd.yaml.j2
+            dest: /tmp/osd.yaml
+
+        - name: Apply osd service
+          shell: cat /tmp/osd.yaml | cephadm shell -- ceph orch apply -i -
+      when: not services.osd.all_available_devices | default(false)
+
+    - name: osd 상태 확인
+      shell: cephadm shell -- ceph orch ps | grep -E 'osd' | grep 'running'
+      register: osd_status
+      until: osd_status.stdout | length > 0
+      retries: 30
+      delay: 10
+  rescue:
+    - name: osd 배포 실패
+      fail:
+        msg: "⚠️ osd 배포 중 오류 발생! 로그를 확인하세요."
+
+- name: "모든 서비스에 필요한 풀 생성"
+  block:
+    - name: "모든 서비스에 필요한 풀 목록 설정"
+      set_fact:
+        pool_names: >-
+          {{ (services.rbd_mirror | default([]) | map(attribute='pool') | list +
+              services.rgw | default([]) | map(attribute='pool') | list +
+              services.nfs | default([]) | map(attribute='pool') | list +
+              services.iscsi | default([]) | map(attribute='pool') | list +
+              services.nvmeof | default([]) | map(attribute='pool') | list +
+              services.mds | default([]) | map(attribute='pool') | selectattr('metadata', 'defined') | map(attribute='metadata') | list +
+              services.mds | default([]) | map(attribute='pool') | selectattr('data', 'defined') | map(attribute='data') | list)
+              | select('defined') | unique }}
+
+    - name: "풀 목록 디버깅"
+      debug:
+        var: pool_names
+
+    - name: "풀 생성"
+      shell: cephadm shell -- ceph osd pool create {{ item }}
+      loop: "{{ pool_names }}"
+      when: pool_names | length > 0
+
+    - name: "모든 풀이 생성될 때까지 대기"
+      shell: cephadm shell -- ceph osd pool ls --format json
+      register: pool_list
+      until: "{{ (pool_list.stdout | from_json) | intersect(pool_names) | length == pool_names | length }}"
+      retries: 10
+      delay: 10
+      when: pool_names | length > 0
+
+  rescue:
+    - name: "풀 생성 중 오류 발생! 로그 확인 필요"
+      fail:
+        msg: "풀 생성 중 오류 발생. ceph osd pool ls 및 ceph osd tree 명령어로 상태를 점검하세요."
+
+- name: "풀 활성화"
+  block:
+    - name: "RBD Mirror 풀 활성화"
+      shell: cephadm shell -- ceph osd pool application enable {{ item.pool }} rbd
+      loop: "{{ services.rbd_mirror | default([]) }}"
+      when: item.pool is defined
+
+    - name: "RGW 풀 활성화"
+      shell: cephadm shell -- ceph osd pool application enable {{ item.pool }} rgw
+      loop: "{{ services.rgw | default([]) }}"
+      when: item.pool is defined
+
+    - name: "NFS 풀 활성화"
+      shell: cephadm shell -- ceph osd pool application enable {{ item.pool }} cephfs
+      loop: "{{ services.nfs | default([]) }}"
+      when: item.pool is defined
+
+    - name: "iSCSI 풀 활성화"
+      shell: cephadm shell -- ceph osd pool application enable {{ item.pool }} rbd
+      loop: "{{ services.iscsi | default([]) }}"
+      when: item.pool is defined
+
+    - name: "NVMeoF 풀 활성화"
+      shell: cephadm shell -- ceph osd pool application enable {{ item.pool }} nvmeof
+      loop: "{{ services.nvmeof | default([]) }}"
+      when: item.pool is defined
+
+    - name: "MDS 풀 활성화"
+      shell: |
+        cephadm shell -- ceph osd pool application enable {{ item.pool.metadata }} cephfs
+        cephadm shell -- ceph osd pool application enable {{ item.pool.data }} cephfs
+      loop: "{{ services.mds | default([]) }}"
+      when: item.pool.metadata is defined and item.pool.data is defined
+
+  rescue:
+    - name: "풀 활성화 실패"
+      debug:
+        msg: "풀 활성화 중 오류 발생! ceph osd pool ls 로 확인하세요."
+
+- name: "RGW(오브젝트 게이트웨이) 설정"
+  block:
+    - name: "RGW Realm 생성"
+      shell: >
+        cephadm shell -- radosgw-admin realm create 
+        --rgw-realm={{ item.realm.name }} 
+        {{ '--default' if item.realm.default | default(false) else '' }}
+      loop: "{{ services.rgw | default([]) | unique('realm.name') }}"
+      when: item.realm.name is defined
+
+    - name: "RGW Zonegroup 생성"
+      shell: >
+        cephadm shell -- radosgw-admin zonegroup create 
+        --rgw-zonegroup={{ item.zonegroup.name }} 
+        {{ '--master' if item.zonegroup.master | default(false) else '' }} 
+        {{ '--default' if item.zonegroup.default | default(false) else '' }}
+      loop: "{{ services.rgw | default([]) | unique('zonegroup.name') }}"
+      when: item.zonegroup.name is defined
+
+    - name: "RGW Zone 생성"
+      shell: >
+        cephadm shell -- radosgw-admin zone create 
+        --rgw-zonegroup={{ item.zonegroup.name }} 
+        --rgw-zone={{ item.zone.name }} 
+        {{ '--master' if item.zone.master | default(false) else '' }} 
+        {{ '--default' if item.zone.default | default(false) else '' }}
+      loop: "{{ services.rgw | default([]) }}"
+      when: item.zone.name is defined and item.zonegroup.name is defined
+
+    - name: "RGW Period Commit"
+      shell: >
+        cephadm shell -- radosgw-admin period update --commit
+      register: period_commit_result
+      failed_when: period_commit_result.rc != 0 and 'multiple master zonegroups' not in period_commit_result.stderr
+
+    - name: "RGW 서비스 배포"
+      shell: >
+        cephadm shell -- ceph orch apply rgw {{ item.name }} 
+        --placement="{{ item.placement }}" 
+        --realm={{ item.realm.name }} 
+        --zonegroup={{ item.zonegroup.name }} 
+        --zone={{ item.zone.name }}
+        --port={{ item.port }}
+      loop: "{{ services.rgw | default([]) }}"
+      when: item.name is defined and item.placement is defined and item.realm.name is defined and item.zonegroup.name is defined and item.zone.name is defined and item.port is defined
+
+  rescue:
+    - name: "RGW 배포 실패"
+      debug:
+        msg: "RGW 생성 중 오류 발생! radosgw-admin realm list 명령어로 상태 확인하세요."
+
+#TODO: check
+# - name: RGW 상태 확인
+#   shell: cephadm shell -- ceph orch ps | grep -E 'rgw' | grep 'running'
+#   register: rgw_status
+#   until: rgw_status.stdout | length > 0
+#   retries: 20
+#   delay: 3
+#   when: services.rgw is defined and services.rgw | length > 0  
+
+- name: CephFS 파일 시스템 생성
+  shell: |
+    cephadm shell -- ceph fs new {{ item.name }} {{ item.pool.metadata }} {{ item.pool.data }}
+  loop: "{{ services.mds | default([]) }}"
+  when: services.mds is defined and services.mds | length > 0
+
+- name: MDS 서비스 배포
+  shell: |
+    cephadm shell -- ceph orch apply mds {{ item.name }} --placement="{{ item.placement }}"
+  loop: "{{ services.mds | default([]) }}"
+  when: services.mds is defined and services.mds | length > 0
+
+#TODO: check
+# - name: MDS 상태 확인
+#   shell: cephadm shell -- ceph orch ps | grep -E 'mds' | grep 'running'
+#   register: mds_status
+#   until: mds_status.stdout | length > 0
+#   retries: 20
+#   delay: 3
+#   when: services.mds is defined and services.mds | length > 0
+
+- name: NFS 서비스 배포
+  shell: |
+    cephadm shell -- ceph orch apply nfs {{ item.name }} --placement="{{ item.placement }}"
+  loop: "{{ services.nfs | default([]) }}"
+  when: services.nfs is defined and services.nfs | length > 0
+
+#TODO: check
+# - name: NFS 상태 확인
+#   shell: cephadm shell -- ceph orch ps | grep -E 'nfs' | grep 'running'
+#   register: nfs_status
+#   until: nfs_status.stdout | length > 0
+#   retries: 20
+#   delay: 3
+#   when: services.nfs is defined and services.nfs | length > 0
+
+- name: RBD Mirror 서비스 배포
+  shell: |
+    cephadm shell -- ceph orch apply rbd-mirror --placement="{{ item.placement }}"
+  loop: "{{ services.rbd_mirror }}"
+  when: services.rbd_mirror is defined and services.rbd_mirror | length > 0
+
+#TODO: check
+# - name: RBD Mirror 상태 확인
+#   shell: cephadm shell -- ceph orch ps | grep -E 'rbd-mirror' | grep 'running'
+#   register: rbd_mirror_status
+#   until: rbd_mirror_status.stdout | length > 0
+#   retries: 20
+#   delay: 3
+#   when: services.rbd_mirror is defined and services.rbd_mirror | length > 0
+
+- name: iSCSI 서비스 배포
+  block:
+    - name: iSCSI spec 파일 생성
+      template:
+        src: iscsi.yaml.j2
+        dest: "/tmp/iscsi_{{ item.name }}.yaml"
+      loop: "{{ services.iscsi }}"
+      when: services.iscsi is defined and services.iscsi | length > 0
+
+    - name: iSCSI 서비스 적용
+      shell: cat /tmp/iscsi_{{ item.name }}.yaml | cephadm shell -- ceph orch apply -i -
+      loop: "{{ services.iscsi }}"
+      when: services.iscsi is defined and services.iscsi | length > 0
+
+    - name: iSCSI 생성 확인
+      shell: cephadm shell -- ceph orch ps | grep -E 'iscsi' | grep 'running'
+      register: iscsi_status
+      until: iscsi_status.stdout | length > 0
+      retries: 20
+      delay: 10
+      when: services.iscsi is defined and services.iscsi | length > 0
+  rescue:
+    - name: iSCSI 배포 실패
+      debug:
+        msg: "⚠️ iSCSI 배포 중 오류 발생! 로그를 확인하세요." 
+
+- name: NVMeoF 서비스 배포
+  block:
+    - name: NVMeoF spec 파일 생성
+      template:
+        src: nvmeof.yaml.j2
+        dest: "/tmp/nvmeof_{{ item.name }}.yaml"
+      loop: "{{ services.nvmeof }}"
+      when: services.nvmeof is defined and services.nvmeof | length > 0
+
+    - name: NVMeoF 서비스 적용
+      shell: cat /tmp/nvmeof_{{ item.name }}.yaml | cephadm shell -- ceph orch apply -i -
+      loop: "{{ services.nvmeof }}"
+      when: services.nvmeof is defined and services.nvmeof | length > 0
+
+    - name: NVMeoF 상태 확인
+      shell: cephadm shell -- ceph orch ps | grep -E 'nvmeof' | grep 'running'
+      register: nvmeof_status
+      until: nvmeof_status.stdout | length > 0
+      retries: 20
+      delay: 10
+      when: services.nvmeof is defined and services.nvmeof | length > 0
+  rescue:
+    - name: NVMeoF 배포 실패
+      debug:
+        msg: "⚠️ NVMeoF 배포 중 오류 발생! 로그를 확인하세요."
+
+- name: 모니터링 서비스 배포
+  shell: |
+    cephadm shell -- ceph orch apply prometheus --placement="{{ services.monitoring.prometheus.placement }}"
+    cephadm shell -- ceph orch apply grafana --placement="{{ services.monitoring.grafana.placement }}"
+    cephadm shell -- ceph orch apply alertmanager --placement="{{ services.monitoring.alertmanager.placement }}"
+    cephadm shell -- ceph orch apply node-exporter --placement="{{ services.monitoring.node_exporter.placement }}"
+    cephadm shell -- ceph orch apply crash --placement="{{ services.monitoring.crash.placement }}"
+  when: services.monitoring is defined
+
+- name: 그라파나 설정 변경
+  shell: |
+    cephadm shell -- ceph dashboard set-grafana-api-url {{ services.monitoring.grafana.api_url }}
+    cephadm shell -- ceph mgr module disable dashboard
+    cephadm shell -- ceph mgr module enable dashboard
+  when: services.monitoring.grafana.api_url is defined
+
+- name: admin 계정 활성화
+  block:
+    - name: admin 초기 비밀번호 설정
+      copy:
+        content: "{{ ceph.dashboard.init_password }}"
+        dest: /tmp/init_password.txt
+
+    - name: admin 비밀번호 변경
+      shell: cat /tmp/init_password.txt | cephadm shell -- ceph dashboard ac-user-set-password admin --force-password -i -
+      
+    - name: admin 비밀번호 파일 삭제
+      file:
+        path: /tmp/init_password.txt
+        state: absent
+
+    - name: admin 계정 활성화
+      shell: cephadm shell -- ceph dashboard ac-user-enable admin

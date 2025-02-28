@@ -1,0 +1,37 @@
+---
+- name: 사전 시스템 검사
+  block:
+    - name: 디스크 사용 가능 여부 확인
+      shell: lsblk {{ services.osd.devices | join(' ') }}
+      register: disk_check
+      ignore_errors: true
+
+    - name: 시스템 요구사항 검증
+      assert:
+        that:
+          - disk_check.rc == 0
+        fail_msg: "시스템 요구사항을 충족하지 못했습니다."
+  when: not services.osd.all_available_devices | default(false)
+
+- name: 필수 시스템 패키지 설치
+  apt:
+    name:
+      - curl
+      - python3
+      - jq
+      - sshpass
+      - podman
+    state: present
+    update_cache: yes
+
+- name: "cephadm 다운로드"
+  ansible.builtin.get_url:
+    url: "https://download.ceph.com/rpm-{{ ceph.cephadm_version }}/el9/noarch/cephadm"
+    dest: "/usr/sbin/cephadm"
+    mode: '0755'
+
+- name: /var/lib/ceph 디렉토리 생성
+  ansible.builtin.file:
+    path: /var/lib/ceph
+    state: directory
+    mode: '0755'
