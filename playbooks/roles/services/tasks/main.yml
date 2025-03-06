@@ -276,21 +276,22 @@
       debug:
         msg: "⚠️ NVMeoF 배포 중 오류 발생! 로그를 확인하세요."
 
-- name: 모니터링 서비스 배포
-  shell: |
-    cephadm shell -- ceph orch apply prometheus --placement="{{ services.monitoring.prometheus.placement }}"
-    cephadm shell -- ceph orch apply grafana --placement="{{ services.monitoring.grafana.placement }}"
-    cephadm shell -- ceph orch apply alertmanager --placement="{{ services.monitoring.alertmanager.placement }}"
-    cephadm shell -- ceph orch apply node-exporter --placement="{{ services.monitoring.node_exporter.placement }}"
-    cephadm shell -- ceph orch apply crash --placement="{{ services.monitoring.crash.placement }}"
-  when: services.monitoring is defined
+# - name: 모니터링 서비스 배포
+#   shell: |
+#     cephadm shell -- ceph orch apply prometheus --placement="{{ services.monitoring.prometheus.placement }}"
+#     cephadm shell -- ceph orch apply grafana --placement="{{ services.monitoring.grafana.placement }}"
+#     cephadm shell -- ceph orch apply alertmanager --placement="{{ services.monitoring.alertmanager.placement }}"
+#     cephadm shell -- ceph orch apply node-exporter --placement="{{ services.monitoring.node_exporter.placement }}"
+#     cephadm shell -- ceph orch apply crash --placement="{{ services.monitoring.crash.placement }}"
+#   when: services.monitoring is defined
 
-- name: 그라파나 설정 변경
+- name: 모니터링 URL 변경
   shell: |
-    cephadm shell -- ceph dashboard set-grafana-api-url {{ services.monitoring.grafana.api_url }}
+    cephadm shell -- ceph dashboard set-grafana-api-url https://{{ ceph.mon_ip }}:3000
+    cephadm shell -- ceph dashboard set-prometheus-api-host http://{{ ceph.mon_ip }}:9090
+    cephadm shell -- ceph dashboard set-alertmanager-api-host http://{{ ceph.mon_ip }}:9093
     cephadm shell -- ceph mgr module disable dashboard
     cephadm shell -- ceph mgr module enable dashboard
-  when: services.monitoring.grafana.api_url is defined
 
 - name: admin 계정 활성화
   block:
@@ -309,3 +310,6 @@
 
     - name: admin 계정 활성화
       shell: cephadm shell -- ceph dashboard ac-user-enable admin
+
+    - name: admin 비활성화 방지
+      shell: ceph config set mgr mgr/dashboard/max_login_attempts 0  
