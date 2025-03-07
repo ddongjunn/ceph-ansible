@@ -8,15 +8,18 @@ Ansible을 사용하여 **Ceph 스토리지 클러스터**를 쉽게 배포, 삭
 - **🖥️ 지원 환경**: Ubuntu 기반 시스템 (3개 이상의 노드 추천)  
 
 ## 참고
-- **테스트 환경**: Ubuntu 24.04.1 LTS, Ceph v19.2.0  
-  - **⚠️ 주의**: Ceph 버전에 따라 명령어가 다를 수 있음  
-  - **🛠️ 해결 방법**: 서비스 배포 로직을 필요에 따라 수정  
-- **주의사항**:  
-  - `all_available_devices: true` 사용 시 루트 디스크(`/dev/sda`) 제외 확인  
-  - `cluster_network` 설정이 노드 간 통신에 맞는지 점검  
-- **추가 문서**:  
-  - [Cephadm](https://docs.ceph.com/en/reef/cephadm/)  
-  - [Cephadm-ansible](https://github.com/ceph/cephadm-ansible)
+**테스트 환경**: Ubuntu 24.04.1 LTS, Ceph v19.2.0  
+**⚠️ 주의**: Ceph 버전에 따라 명령어가 다를 수 있음  
+**🛠️ 해결 방법**: 서비스 배포 로직을 필요에 따라 수정  
+  
+**주의사항**:  
+- `all_available_devices: true` 사용 시 루트 디스크(`/dev/sda`) 제외 확인  
+- `cluster_network` 설정이 노드 간 통신에 맞는지 점검  
+  
+**추가 문서**:  
+- [Cephadm](https://docs.ceph.com/en/reef/cephadm/)  
+- [Cephadm-ansible](https://github.com/ceph/cephadm-ansible)
+  
 
 ## 1️⃣ 요구사항
 ### 필수설치
@@ -207,20 +210,6 @@ services:
 
   # NVMe over Fabrics: 고성능 블록 스토리지 사용 시 필요
   nvmeof: []
-
-  # 모니터링 도구: 클러스터 상태 모니터링 시 필요
-  monitoring:
-    prometheus:
-      placement: "1"
-    grafana:
-      api_url: "https://192.168.0.191:3000"
-      placement: "1"
-    alertmanager:
-      placement: "1"
-    node_exporter:
-      placement: "*"
-    crash:
-      placement: "*"
 ```
 
 ### 📌 서비스 유형 정의 (`group_vars/all.yml`)  
@@ -256,6 +245,7 @@ osd:
 
 ### **🔹 선택 서비스 (사용하지 않을 경우 빈 리스트 [] 설정 가능)**
 2개 이상 동일한 서비스 배포시 별도의 포트 지정
+
 | 서비스 | 설명 |
 |--------|--------------------------------------------------|
 | **📂 MDS (CephFS)** | CephFS(파일 스토리지) 사용 시 필요 |
@@ -290,7 +280,6 @@ TASK [클러스터 삭제 확인 요청] ***************************************
 yes
 ```
 
-
 ## 5️⃣ 트러블 슈팅
 ### 📌 osd 배포가 안되는경우 
 ```bash
@@ -298,10 +287,11 @@ TASK [services : osd 배포 실패] *************************************
 fatal: [squid4]: FAILED! => {"changed": false, "msg": "⚠️ osd 배포 중 오류 발생! 로그를 확인하세요."}
 ```
 
-1. 디스크 상태 확인
+**1. 디스크 상태 확인**
 
 - `"REJECT REASONS"`에 `"Has a filesystem"`이 표시되면, 기존 파일 시스템이 존재하여 Ceph에서 사용하지 않는 상태
 - `"AVAILABLE"`이 `"No"`로 되어 있으면 해당 디바이스를 OSD로 사용할 수 없음
+
 ```bash
 root@squid4:~/ceph-ansible# cephadm shell -- ceph orch device ls
 Inferring fsid fb2a0676-f439-11ef-82d7-080027b7bc18
@@ -324,14 +314,14 @@ squid6  /dev/nvme0n2  ssd   ORCL-VBOX-NVME-VER12_VB1234-56789      25.0G  Yes   
 squid6  /dev/sdb      hdd   ATA_VBOX_HARDDISK_VB3046362a-5fedd26f  25.0G  Yes        6m ago                                                                            
 squid6  /dev/sdc      hdd   ATA_VBOX_HARDDISK_VB315e39f4-ff71492b  25.0G  Yes        6m ago                                                                            
 squid6  /dev/sr0      hdd   VBOX_CD-ROM_VB2-01700376               1023M  No         6m ago     Failed to determine if device is BlueStore, Insufficient space (<5GB)  
-
 ```
-2. 클러스터 삭제
+
+**2. 클러스터 삭제**
 ```bash
 ./cephctl.sh cleanup
 ```
 
-2. AppArmor 재확인
+**2. AppArmor 재확인**
 ```bash
 cat /sys/module/apparmor/parameters/enabled # Y인 경우
 
@@ -340,23 +330,23 @@ mv /etc/apparmor.d/MongoDB_Compass /etc/apparmor.d/disabled/
 systemctl disable apparmor && service apparmor stop && reboot
 ```
 
-3. 재배포
+**3. 재배포**
 ```bash
 ./cephctl.sh deploy
 ```
 
 ### 📌 특정 노드에서 삭제가 안되는 경우 (해당 노드 재부팅 후 수동으로 삭제)
-1. 노드 재부팅
+**1. 노드 재부팅**
 ```bash
 ssh root@<노드> "reboot"
 ```
-2. Cephadm 다운로드 및 실행 권한 설정
+
+**2. Cephadm 다운로드 및 실행 권한 설정**
 ```bash
 curl -o /usr/sbin/cephadm https://download.ceph.com/rpm-{{ ceph.cephadm_version }}/el9/noarch/cephadm
 chmod 755 /usr/sbin/cephadm
 ```
-3. fsid dir 확인
-
+**3. fsid dir 확인**
 해당 노드 fsid dir 확인(Ceph 클러스터의 고유 식별자)를 확인
 ```bash
 root@squid5:~# ls -al /var/lib/ceph
@@ -366,9 +356,10 @@ drwxr-xr-x 47 root root 4096 Feb 27 04:36 ..
 drwx------  8  167  167 4096 Feb 27 10:59 fb2a0676-f439-11ef-82d7-080027b7bc18
 ```
 
-4. 클러스터 강제 삭제
+**4. 클러스터 강제 삭제**
 ```bash
 cephadm rm-cluster --force --zap-osds --fsid "{{ clean.fsid }}"
 ```
+
 ---
 사용하시면서 이슈나 개선 사항이 있으면 PR 또는 Amaranth로 공유 부탁드립니다! 🙌
