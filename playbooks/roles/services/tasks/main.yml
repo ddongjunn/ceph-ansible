@@ -142,6 +142,7 @@
       loop: "{{ services.rgw | default([]) }}"
       when: item.zone.name is defined and item.zonegroup.name is defined
 
+    #TODO : realm, zonegroup, zone 확인 후 배포 해야됨
     - name: "RGW Period Commit"
       shell: >
         cephadm shell -- radosgw-admin period update --commit
@@ -285,13 +286,13 @@
 #     cephadm shell -- ceph orch apply crash --placement="{{ services.monitoring.crash.placement }}"
 #   when: services.monitoring is defined
 
-- name: 모니터링 URL 변경
-  shell: |
-    cephadm shell -- ceph dashboard set-grafana-api-url https://{{ ceph.mon_ip }}:3000
-    cephadm shell -- ceph dashboard set-prometheus-api-host http://{{ ceph.mon_ip }}:9090
-    cephadm shell -- ceph dashboard set-alertmanager-api-host http://{{ ceph.mon_ip }}:9093
-    cephadm shell -- ceph mgr module disable dashboard
-    cephadm shell -- ceph mgr module enable dashboard
+# - name: 모니터링 URL 변경
+#   shell: |
+#     cephadm shell -- ceph dashboard set-grafana-api-url https://{{ ceph.mon_ip }}:3000
+#     cephadm shell -- ceph dashboard set-prometheus-api-host http://{{ ceph.mon_ip }}:9090
+#     cephadm shell -- ceph dashboard set-alertmanager-api-host http://{{ ceph.mon_ip }}:9093
+#     cephadm shell -- ceph mgr module disable dashboard
+#     cephadm shell -- ceph mgr module enable dashboard
 
 - name: admin 계정 활성화
   block:
@@ -308,8 +309,9 @@
         path: /tmp/init_password.txt
         state: absent
 
-    - name: admin 계정 활성화
-      shell: cephadm shell -- ceph dashboard ac-user-enable admin
+    #개발서버 사용
+    - name: 계정 비활성화 방지
+      shell: cephadm shell -- ceph dashboard set-account-lockout-attempts 0
 
-    - name: admin 비활성화 방지
-      shell: ceph config set mgr mgr/dashboard/max_login_attempts 0  
+    - name: admin 계정 활성화
+      shell: cephadm shell -- ceph dashboard ac-user-enable admin  

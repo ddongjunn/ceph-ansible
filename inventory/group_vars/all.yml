@@ -23,8 +23,7 @@ clean: # 클러스터 삭제시 사용
     - ceph-mgr
     - ceph-mon
     - ceph-osd
-    - ceph-mds    
-    - cephadm
+    - ceph-mds
     - ceph-common
 
 # 배포할 서비스 정의
@@ -119,17 +118,3 @@ services:
         hosts:
           - "squid5"
           - "squid6"
-
-  # 모니터링 도구: 클러스터 상태 모니터링 시 필요
-  monitoring:
-    prometheus:
-      placement: "1"
-    grafana:
-      api_url: "https://192.168.0.191:3000"
-      placement: "1"
-    alertmanager:
-      placement: "1"
-    node_exporter:
-      placement: "*"
-    crash:
-      placement: "*"
